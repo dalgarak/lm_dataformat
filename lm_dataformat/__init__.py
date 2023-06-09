@@ -33,12 +33,12 @@ def listdir_or_file(x):
     return list(filter(has_valid_extension, _listdir_or_file(x)))
 
 def tarfile_reader(file, streaming=False):
-    # we need our own tarfile parser because `tarfile` doesn't work well for 
-    # big tarfiles; it seems to be reading the entire file to get a list of 
-    # where all the files are - but we don't need that because we just need 
-    # to see each file once. surprisingly, `tarfile` doesn't expose any 
-    # facilities for this. the only options are 1. load the entire tarfile 
-    # and then query by filename or 2. extract to disk - and neither of 
+    # we need our own tarfile parser because `tarfile` doesn't work well for
+    # big tarfiles; it seems to be reading the entire file to get a list of
+    # where all the files are - but we don't need that because we just need
+    # to see each file once. surprisingly, `tarfile` doesn't expose any
+    # facilities for this. the only options are 1. load the entire tarfile
+    # and then query by filename or 2. extract to disk - and neither of
     # these is what we want.
 
     offset = 0
@@ -52,10 +52,10 @@ def tarfile_reader(file, streaming=False):
         if hdr[124:135] == b'\0'*11:
             # end of record
             break
-        
+
         fname = hdr[:100].split(b'\0')[0]
 
-        # if the file is too big to fit in the size field, tarfiles will actually 
+        # if the file is too big to fit in the size field, tarfiles will actually
         # include a PaxHeader with the size in it, applicable to the immediate next file.
         if paxfilesize is not None:
             size = paxfilesize
@@ -74,7 +74,7 @@ def tarfile_reader(file, streaming=False):
             def kv(x):
                 return x.decode('utf-8').split(' ')[1].split('=')
             paxfileattrs = {
-                kv(x)[0]: kv(x)[1] 
+                kv(x)[0]: kv(x)[1]
                     for x in meta.split(b'\n') if x
             }
             paxfilesize = int(paxfileattrs['size'])
@@ -123,26 +123,26 @@ def handle_jsonl(jsonl_reader, get_meta, autojoin_paragraphs, para_joiner, key='
 class Reader:
     def __init__(self, in_path):
         self.in_path = in_path
-    
-    def stream_data(self, get_meta=False, threaded=False):
+
+    def stream_data(self, get_meta=False, threaded=False, jsonl_key="text"):
         if not threaded:
-            yield from self._stream_data(get_meta)
+            yield from self._stream_data(get_meta, jsonl_key)
             return
 
         q = mp.Queue(1000)
-        p = mp.Process(target=self._stream_data_threaded, args=(q, get_meta))
+        p = mp.Process(target=self._stream_data_threaded, args=(q, get_meta, jsonl_key))
         p.start()
         while p.is_alive():
             res = q.get()
             if res is None: break
             yield res
-    
-    def _stream_data_threaded(self, q, get_meta=False):
-        for data in self._stream_data(get_meta):
+
+    def _stream_data_threaded(self, q, get_meta, jsonl_key):
+        for data in self._stream_data(get_meta, jsonl_key):
             q.put(data)
         q.put(None)
 
-    def _stream_data(self, get_meta=False, jsonl_key="text"):
+    def _stream_data(self, get_meta, jsonl_key):
         self.f_name = ""
         files = listdir_or_file(self.in_path)
         if not files:
@@ -173,7 +173,7 @@ class Reader:
                 yield from self.read_json(f)
             elif f.endswith('.txt'):
                 assert not get_meta
-                
+
                 yield from self.read_txt(f)
             elif f.endswith('.zip'):
                 assert not get_meta
@@ -185,11 +185,11 @@ class Reader:
                 yield from self.read_tgz(f)
             elif f.endswith('.json.gz'):
                 assert not get_meta
-                
+
                 yield from self.read_jsongz(f)
             elif f.endswith('.gz'):
                 assert not get_meta
-               
+
                 yield from self.read_gz(f)
             else:
                 # shouldn't be reached
@@ -207,16 +207,16 @@ class Reader:
     def read_tgz(self, file):
         gz = gzip.open(file)
         yield from (x.decode('utf-8') for x in tarfile_reader(gz, streaming=False))
-    
-    def read_gz(self, file): 
+
+    def read_gz(self, file):
         with gzip.open(file, 'rb') as f:
             for line in f:
                 yield line.decode('utf-8')
-                
-    def read_jsongz(self, file): 
+
+    def read_jsongz(self, file):
         for line in self.read_gz(file):
             yield json.loads(line)
-                
+
     def read_json(self, file):
         with open(file, 'rb') as fh:
             cctx = zstandard.ZstdDecompressor()
@@ -240,7 +240,7 @@ class Reader:
     def read_jsonl(self, file, get_meta=False, autojoin_paragraphs=True, para_joiner='\n\n', key='text'):
         with jsonlines.open(file) as rdr:
             yield from handle_jsonl(rdr, get_meta, autojoin_paragraphs, para_joiner, key)
-            
+
     def read_jsonl_zst(self, file, get_meta=False, autojoin_paragraphs=True, para_joiner='\n\n', key='text'):
         with open(file, 'rb') as fh:
             cctx = zstandard.ZstdDecompressor()
@@ -256,7 +256,7 @@ class Reader:
                 rdr = jsonlines.Reader(reader)
                 yield from handle_jsonl(rdr, get_meta, autojoin_paragraphs, para_joiner, key)
                 f.close()
-            
+
     def read_owt(self, file):
         tar = tarfile.open(file, encoding='utf-8')
         utf8reader = codecs.getreader('utf-8')
@@ -283,19 +283,19 @@ class Archive:
         self.out_dir = out_dir
         os.makedirs(out_dir, exist_ok=True)
         self.i = 0
-        
+
         self.fh = open(self.out_dir + '/current_chunk_incomplete', 'wb')
         self.cctx = zstandard.ZstdCompressor(level=compression_level, threads=threads)
         self.compressor = self.cctx.stream_writer(self.fh)
-        
-    
+
+
     def add_data(self, data, meta={}):
         self.compressor.write(json.dumps({'text': data, 'meta': meta}).encode('UTF-8') + b'\n')
-    
+
     def commit(self, archive_name='default'):
         fname = self.out_dir + '/data_' + str(self.i) + '_time' + str(int(time.time())) + '_' + archive_name + '.jsonl.zst'
         self.compressor.flush(zstandard.FLUSH_FRAME)
-        
+
         self.fh.flush()
         self.fh.close()
         os.rename(self.out_dir + '/current_chunk_incomplete', fname)
@@ -313,10 +313,10 @@ class DatArchive:
         self.i = 0
         if os.path.exists(out_dir) and len(os.listdir(out_dir)) > 0:
             self.i = max(map(lambda x: int(x.split('_')[1].split('.')[0]), os.listdir(out_dir))) + 1
-    
+
     def add_data(self, data):
         self.data.append(data)
-    
+
     def commit(self, archive_name=None):
         # TODO: streaming
         cctx = zstandard.ZstdCompressor(level=3)
@@ -341,13 +341,13 @@ class JSONArchive:
         self.i = 0
         if os.path.exists(out_dir) and len(os.listdir(out_dir)) > 0:
             self.i = max(map(lambda x: int(x.split('_')[1].split('.')[0]), os.listdir(out_dir))) + 1
-    
+
     def add_data(self, data):
         self.data.append(data)
-    
+
     def commit(self):
         cctx = zstandard.ZstdCompressor(level=3)
-        
+
         cdata = cctx.compress(json.dumps(self.data).encode('UTF-8'))
         with open(self.out_dir + '/data_' + str(self.i) + '_' + str(int(time.time())) + '.json.zst', 'wb') as fh:
             fh.write(cdata)
